@@ -1,7 +1,6 @@
 import cv2
 import torch
 import os
-from tqdm import tqdm
 from datetime import datetime
 
 INPUT_DIR = r"D:\DIF_Videos"  
@@ -30,8 +29,12 @@ print("YOLOv5 model loaded\n")
 
 # extraction fucntion
 def extract_roi_from_video(input_video_path, output_video_path):
-    cap = cv2.VideoCapture(input_video_path)
-    if not cap.isOpened():
+
+    try:
+        # Open input video
+        cap = cv2.VideoCapture(input_video_path)
+        
+        if not cap.isOpened():
             return {
                 'video': os.path.basename(input_video_path),
                 'status': 'FAILED',
@@ -39,9 +42,98 @@ def extract_roi_from_video(input_video_path, output_video_path):
                 'frames_processed': 0,
                 'frames_saved': 0
             }
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS) 
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Setup video writer
+        out = None
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        
+        frames_processed = 0
+        frames_saved = 0
+        
+        while True:
+            ret, frame = cap.read()
+            
+            if not ret:
+                break
+            
+            frames_processed += 1
+            
+            # Detect faces using YOLOv5
+            results = model(frame)
+            detections = results.xyxy[0].cpu().numpy()
+            
+            if len(detections) > 0:
+                # Get the first (largest) face detection
+                x_min, y_min, x_max, y_max, conf, cls = detections[0]
+                
+                # Convert to int
+                x_min, y_min, x_max, y_max = int(x_min), int(y_min), int(x_max), int(y_max)
+                
+                # Ensure coordinates are within frame bounds
+                x_min = max(0, x_min)
+                y_min = max(0, y_min)
+                x_max = min(width, x_max)
+                y_max = min(height, y_max)
+                
+                # Extract face ROI
+                face_roi = frame[y_min:y_max, x_min:x_max]
+                
+                # Skip if ROI is too small
+                if face_roi.shape[0] < 50 or face_roi.shape[1] < 50:
+                    continue
+                
+                # Resize to standard size
+                face_roi_resized = cv2.resize(face_roi, (ROI_SIZE, ROI_SIZE))
+                
+                # Initialize video writer on first face detection
+                if out is None:
+                    out = cv2.VideoWriter(
+                        output_video_path, 
+                        fourcc, 
+                        fps, 
+                        (ROI_SIZE, ROI_SIZE)
+                    )
+                
+                # Write frame to output video
+                out.write(face_roi_resized)
+                frames_saved += 1
+        
+        # Release resources
+        cap.release()
+        if out is not None:
+            out.release()
+        
+        # Check if output file was created successfully
+        if os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 1000:
+            detection_rate = (frames_saved / frames_processed * 100) if frames_processed > 0 else 0
+            
+            return {
+                'video': os.path.basename(input_video_path),
+                'status': 'SUCCESS',
+                'frames_processed': frames_processed,
+                'frames_saved': frames_saved,
+                'detection_rate': f"{detection_rate:.1f}%"
+            }
+        else:
+            return {
+                'video': os.path.basename(input_video_path),
+                'status': 'FAILED',
+                'error': 'No frames with detected face',
+                'frames_processed': frames_processed,
+                'frames_saved': frames_saved
+            }
     
-    # video properties
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    except Exception as e:
+        return {
+            'video': os.path.basename(input_video_path),
+            'status': 'FAILED',
+            'error': str(e)[:100],
+            'frames_processed': 0,
+            'frames_saved': 0
+        }
