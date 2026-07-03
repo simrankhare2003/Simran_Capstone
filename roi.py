@@ -1,7 +1,5 @@
 import cv2
-import torch
 import os
-from datetime import datetime
 
 INPUT_DIR = r"D:\DIF_Videos"  
 OUTPUT_DIR = r"D:\DIF_Videos_ROI"  
@@ -12,22 +10,19 @@ SOBER_INPUT = os.path.join(INPUT_DIR, "sober")
 DRUNK_OUTPUT = os.path.join(OUTPUT_DIR, "drunk")
 SOBER_OUTPUT = os.path.join(OUTPUT_DIR, "sober")
 
-ROI_SIZE = 256
+ROI_SIZE = 256  
 
-#O/p directory
+# output directories
 os.makedirs(DRUNK_OUTPUT, exist_ok=True)
 os.makedirs(SOBER_OUTPUT, exist_ok=True)
 
-print(f"Input directory:  {INPUT_DIR}")
-print(f"Output directory: {OUTPUT_DIR}\n")
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+)
+print("Haar Cascade loaded\n")
 
-#https://github.com/ultralytics/yolov5
-#https://pytorch.org/hub/ultralytics_yolov5/
-model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
-model.conf = 0.5  # Confidence threshold
-print("YOLOv5 model loaded\n")
+# ROI EXTRACTION FUNCTION
 
-# extraction fucntion
 def extract_roi_from_video(input_video_path, output_video_path):
 
     try:
@@ -43,13 +38,12 @@ def extract_roi_from_video(input_video_path, output_video_path):
                 'frames_saved': 0
             }
         
-        # Get video properties
-        fps = cap.get(cv2.CAP_PROP_FPS) 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        #video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Setup video writer
+        #video writer
         out = None
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         
@@ -64,25 +58,29 @@ def extract_roi_from_video(input_video_path, output_video_path):
             
             frames_processed += 1
             
-            # Detect faces using YOLOv5
-            results = model(frame)
-            detections = results.xyxy[0].cpu().numpy()
+            # Convert to grayscale
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            if len(detections) > 0:
-                # Get the first (largest) face detection
-                x_min, y_min, x_max, y_max, conf, cls = detections[0]
-                
-                # Convert to int
-                x_min, y_min, x_max, y_max = int(x_min), int(y_min), int(x_max), int(y_max)
+            #Detect faces
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(50, 50)
+            )
+            
+            if len(faces) > 0:
+                # Get face
+                (x, y, w, h) = faces[0]
                 
                 # Ensure coordinates are within frame bounds
-                x_min = max(0, x_min)
-                y_min = max(0, y_min)
-                x_max = min(width, x_max)
-                y_max = min(height, y_max)
+                x = max(0, x)
+                y = max(0, y)
+                x_max = min(width, x + w)
+                y_max = min(height, y + h)
                 
                 # Extract face ROI
-                face_roi = frame[y_min:y_max, x_min:x_max]
+                face_roi = frame[y:y_max, x:x_max]
                 
                 # Skip if ROI is too small
                 if face_roi.shape[0] < 50 or face_roi.shape[1] < 50:
@@ -104,12 +102,11 @@ def extract_roi_from_video(input_video_path, output_video_path):
                 out.write(face_roi_resized)
                 frames_saved += 1
         
-        # Release resources
         cap.release()
         if out is not None:
             out.release()
         
-        # Check if output file was created successfully
+        # Check if output file was created
         if os.path.exists(output_video_path) and os.path.getsize(output_video_path) > 1000:
             detection_rate = (frames_saved / frames_processed * 100) if frames_processed > 0 else 0
             
@@ -137,3 +134,48 @@ def extract_roi_from_video(input_video_path, output_video_path):
             'frames_processed': 0,
             'frames_saved': 0
         }
+
+# PROCESS ALL VIDEOS
+
+def process_category(input_dir, output_dir, category_name):
+    """Process all videos in a category (silent)"""
+    
+    video_files = [f for f in os.listdir(input_dir) if f.endswith('.mp4')]
+    results = []
+    
+    for video_file in video_files:
+        input_path = os.path.join(input_dir, video_file)
+        output_path = os.path.join(output_dir, video_file)
+        
+        result = extract_roi_from_video(input_path, output_path)
+        results.append(result)
+    
+    return results
+
+print("Starting ROI extraction...")
+
+input("Press enter to start...")
+
+# Process videos
+drunk_results = process_category(DRUNK_INPUT, DRUNK_OUTPUT, "drunk")
+sober_results = process_category(SOBER_INPUT, SOBER_OUTPUT, "sober")
+
+print("ROI EXTRACTION COMPLETE")
+
+# drunk_success = sum(1 for r in drunk_results if r['status'] == 'SUCCESS')
+# sober_success = sum(1 for r in sober_results if r['status'] == 'SUCCESS')
+
+# total_drunk_frames = sum(r.get('frames_processed', 0) for r in drunk_results)
+# total_drunk_saved = sum(r.get('frames_saved', 0) for r in drunk_results)
+
+# total_sober_frames = sum(r.get('frames_processed', 0) for r in sober_results)
+# total_sober_saved = sum(r.get('frames_saved', 0) for r in sober_results)
+
+# print(f"DRUNK: {drunk_success}/{len(drunk_results)} processed | {total_drunk_saved:,} frames saved")
+# print(f"SOBER: {sober_success}/{len(sober_results)} processed | {total_sober_saved:,} frames saved\n")
+
+# total_success = drunk_success + sober_success
+# total_videos = len(drunk_results) + len(sober_results)
+
+# print(f"Overall: {total_success}/{total_videos} videos processed successfully")
+# print(f"Output: {OUTPUT_DIR}\n")
